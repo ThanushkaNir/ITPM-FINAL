@@ -29,6 +29,21 @@ const formatIsoDateForDisplay = (value) => {
   return new Date(`${iso}T00:00:00`).toLocaleDateString();
 };
 
+const getAssignmentCalendarDate = (assignment) => {
+  if (assignment?.status === 'COMPLETED' && assignment?.completedAt) {
+    return normalizeIsoDate(assignment.completedAt);
+  }
+  return normalizeIsoDate(assignment?.dueDate);
+};
+
+const isLateSubmission = (assignment) => {
+  if (assignment?.status !== 'COMPLETED') return false;
+  const completedDate = normalizeIsoDate(assignment?.completedAt);
+  const dueDate = normalizeIsoDate(assignment?.dueDate);
+  if (!completedDate || !dueDate) return false;
+  return completedDate > dueDate;
+};
+
 function AssignmentTracker() {
   const userId = localStorage.getItem('userId');
   const userRole = localStorage.getItem('userRole') || 'STUDENT';
@@ -69,6 +84,7 @@ function AssignmentTracker() {
     let dueDate = null;
     let dueTime = null;
 
+    // Try ISO format first (YYYY-MM-DD)
     const isoDateMatch = text.match(/\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/);
     if (isoDateMatch) {
       const y = Number(isoDateMatch[1]);
@@ -79,6 +95,7 @@ function AssignmentTracker() {
       }
     }
 
+    // Try DMY format (DD-MM-YYYY or MM-DD-YYYY)
     if (!dueDate) {
       const dmy = text.match(/\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b/);
       if (dmy) {
@@ -97,6 +114,42 @@ function AssignmentTracker() {
       }
     }
 
+    // Try ordinal month names: "14th April 2026" or "April 14th, 2026"
+    if (!dueDate) {
+      const monthNames = {
+        'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+        'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6, 'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+      };
+
+      // Pattern: "14th April 2026" or "14 April 2026"
+      const ordinalPattern = text.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s+(\d{4})\b/i);
+      if (ordinalPattern) {
+        const day = Number(ordinalPattern[1]);
+        const monthName = ordinalPattern[2].toLowerCase();
+        const year = Number(ordinalPattern[3]);
+        const month = monthNames[monthName];
+        if (month && day >= 1 && day <= 31 && year >= 1900 && year <= 2100) {
+          dueDate = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        }
+      }
+
+      // Pattern: "April 14th, 2026" or "April 14, 2026"
+      if (!dueDate) {
+        const reverseOrdinalPattern = text.match(/\b([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})\b/i);
+        if (reverseOrdinalPattern) {
+          const monthName = reverseOrdinalPattern[1].toLowerCase();
+          const day = Number(reverseOrdinalPattern[2]);
+          const year = Number(reverseOrdinalPattern[3]);
+          const month = monthNames[monthName];
+          if (month && day >= 1 && day <= 31 && year >= 1900 && year <= 2100) {
+            dueDate = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          }
+        }
+      }
+    }
+
+    // Parse 12-hour time format (11:59 PM)
     const time12 = text.match(/\b(\d{1,2}):(\d{2})\s*([AaPp][Mm])\b/);
     if (time12) {
       let h = Number(time12[1]);
@@ -109,6 +162,7 @@ function AssignmentTracker() {
       }
     }
 
+    // Parse 24-hour time format
     if (!dueTime) {
       const time24 = text.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
       if (time24) {
@@ -448,7 +502,7 @@ function AssignmentTracker() {
   const dueByDate = useMemo(() => {
     const map = new Map();
     assignments.forEach((a) => {
-      const key = normalizeIsoDate(a.dueDate);
+      const key = getAssignmentCalendarDate(a);
       if (!key) return;
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(a);
@@ -497,6 +551,18 @@ function AssignmentTracker() {
     return text || 'Any time';
   };
   const displayStatus = (status) => (status === 'COMPLETED' ? 'Done' : 'Pending');
+  const getCalendarPillLabel = (assignment) => {
+    const parsed = parseSource(assignment);
+    if (assignment.status !== 'COMPLETED') {
+      return `${parsed.displayName} - Due ${formatDate(assignment.dueDate)}`;
+    }
+
+    if (isLateSubmission(assignment)) {
+      return `${parsed.displayName} - Late Submit ${formatDate(assignment.dueDate)}`;
+    }
+
+    return `${parsed.displayName} - Done ${formatDate(assignment.dueDate)}`;
+  };
 
   const parseSource = (assignment) => {
     const rawName = (assignment?.name || '').trim();
@@ -801,8 +867,16 @@ function AssignmentTracker() {
                       <div className="day-number">{cell.dayNum}</div>
                       <div className="day-items">
                         {cell.items.slice(0, 2).map((a) => (
-                          <span key={a.id} className={`day-pill ${a.status === 'COMPLETED' ? 'done' : 'pending'}`}>
-                            {a.name}
+                          <span
+                            key={a.id}
+                            className={`day-pill ${
+                              a.status === 'COMPLETED'
+                                ? (isLateSubmission(a) ? 'late' : 'done')
+                                : 'pending'
+                            }`}
+                            title={getCalendarPillLabel(a)}
+                          >
+                            {getCalendarPillLabel(a)}
                           </span>
                         ))}
                         {cell.items.length > 2 && <span className="more-pill">+{cell.items.length - 2} more</span>}

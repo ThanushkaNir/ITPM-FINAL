@@ -329,6 +329,16 @@
   grid-template-columns: 1fr 1fr;
   gap: 12px;
   margin-bottom: 24px;
+  align-items: center;
+}
+.al-google-wrap {
+  display: flex;
+  justify-content: center;
+  min-height: 44px;
+}
+.al-google-wrap.al-google-wrap--busy {
+  opacity: 0.65;
+  pointer-events: none;
 }
 .al-social-btn {
   display: flex;

@@ -14,7 +14,7 @@ import java.nio.file.Path;
 public class PdfTextService {
 
     /**
-     * Extract text from a PDF file (path on disk).
+     * Extract text from a PDF file (path on disk,  ).
      */
     public String extractText(Path path) throws IOException {
         byte[] bytes = Files.readAllBytes(path);

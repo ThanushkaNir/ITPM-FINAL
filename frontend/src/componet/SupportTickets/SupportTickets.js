@@ -150,6 +150,24 @@ function SupportTickets() {
     }
   };
 
+  const deleteTicket = async (id) => {
+    const confirmed = window.confirm('Clear this ticket permanently?');
+    if (!confirmed) return;
+
+    try {
+      await axios.delete(`${API}/tickets/${id}`);
+      if (selectedTicket?.id === id) {
+        setSelectedTicket(null);
+        setAdminResponse('');
+        setResponseErrors({ response: '', submit: '' });
+      }
+      if (isAdmin) await loadAllTickets();
+      else await loadMyTickets();
+    } catch (e) {
+      alert('Failed to clear ticket');
+    }
+  };
+
   const formatDate = (d) => (d ? new Date(d).toLocaleString() : '—');
 
   const filtered = statusFilter
@@ -254,6 +272,16 @@ function SupportTickets() {
                     <p className="ticket-meta">Created {formatDate(t.createdAt)} {t.updatedAt && t.updatedAt !== t.createdAt ? `• Updated ${formatDate(t.updatedAt)}` : ''}</p>
                   </div>
                   <p className="ticket-desc">{t.description}</p>
+
+                  <div className="ticket-card-actions">
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => deleteTicket(t.id)}
+                    >
+                      Clear Ticket
+                    </button>
+                  </div>
                   
                   {/* Student view of admin response */}
                   {t.response && (

@@ -1,13 +1,18 @@
 package backend.Controller;
 
 import backend.Model.KnowledgeEntry;
+import backend.Model.KnowledgeChatRequest;
+import backend.Model.KnowledgeChatResponse;
 import backend.Repository.KnowledgeEntryRepository;
+import backend.Service.KnowledgeChatService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/knowledge")
@@ -16,6 +21,9 @@ public class KnowledgeEntryController {
 
     @Autowired
     private KnowledgeEntryRepository knowledgeRepository;
+
+    @Autowired
+    private KnowledgeChatService knowledgeChatService;
 
     @GetMapping
     public List<KnowledgeEntry> getAll(@RequestParam(required = false) String category) {
@@ -57,5 +65,34 @@ public class KnowledgeEntryController {
             return ResponseEntity.notFound().build();
         knowledgeRepository.deleteById(id);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/chat")
+    public ResponseEntity<KnowledgeChatResponse> chat(@RequestBody(required = false) KnowledgeChatRequest request) {
+        String message = request == null ? "" : request.getMessage();
+        return ResponseEntity.ok(knowledgeChatService.ask(message));
+    }
+
+    @GetMapping("/suggestions")
+    public List<String> getSuggestions(@RequestParam(required = false) String q) {
+        if (q == null || q.isBlank()) {
+            return List.of();
+        }
+
+        String query = q.trim();
+        return knowledgeRepository.search(query).stream()
+                .flatMap(entry -> List.of(
+                        entry.getTitle(),
+                        "What is " + entry.getTitle() + "?",
+                        entry.getCategory() == null || entry.getCategory().isBlank()
+                                ? null
+                                : "Explain " + entry.getCategory() + " rules"
+                ).stream())
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .distinct()
+                .limit(6)
+                .collect(Collectors.toList());
     }
 }

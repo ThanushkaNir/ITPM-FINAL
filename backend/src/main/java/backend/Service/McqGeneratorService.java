@@ -6,11 +6,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * Generates MCQs from text (mock AI - can be replaced with real AI API).
+ * Generates exam-style MCQs from study material.
+ * Keeps questions tied to the uploaded text and avoids vague generic prompts.
  */
 @Service
 public class McqGeneratorService {
@@ -19,56 +21,80 @@ public class McqGeneratorService {
     private QuestionRepository questionRepository;
 
     private static final Pattern SENTENCE = Pattern.compile("[^.!?]+[.!?]");
-        private static final Pattern TOKEN = Pattern.compile("[A-Za-z][A-Za-z0-9-]{2,}");
+    private static final Pattern TOKEN = Pattern.compile("[A-Za-z][A-Za-z0-9-]{2,}");
     private static final int REQUIRED_MIN_QUESTIONS = 20;
     private static final int MIN_TEXT_LENGTH = 20;
     private static final int MIN_SENTENCE_LENGTH = 10;
-        private static final Set<String> STOPWORDS = Set.of(
-            "the", "and", "for", "that", "with", "this", "from", "have", "are", "was", "were", "been",
-            "into", "their", "about", "which", "when", "where", "your", "you", "they", "them", "there",
-            "than", "then", "will", "would", "could", "should", "also", "using", "used", "use", "such",
-            "many", "most", "more", "less", "some", "each", "only", "very", "between", "after", "before",
-            "note", "notes", "document", "study", "students", "student"
-        );
 
-    /**
-     * Extract sentences from raw text for use in questions.
-     */
+    private static final Set<String> STOPWORDS = Set.of(
+        "the", "and", "for", "that", "with", "this", "from", "have", "are", "was", "were", "been",
+        "into", "their", "about", "which", "when", "where", "your", "you", "they", "them", "there",
+        "than", "then", "will", "would", "could", "should", "also", "using", "used", "use", "such",
+        "many", "most", "more", "less", "some", "each", "only", "very", "between", "after", "before",
+        "note", "notes", "document", "study", "students", "student", "is", "it", "be", "has", "do",
+        "perform", "multiple", "another", "even", "across", "while"
+    );
+
     public List<String> extractSentences(String text) {
-        if (text == null || text.trim().length() < MIN_TEXT_LENGTH)
+        if (text == null || text.trim().length() < MIN_TEXT_LENGTH) {
             return Collections.emptyList();
+        }
         String cleaned = text.replaceAll("\\s+", " ").trim();
         List<String> list = new ArrayList<>();
-        java.util.regex.Matcher m = SENTENCE.matcher(cleaned);
-        while (m.find()) list.add(m.group().trim());
+        Matcher matcher = SENTENCE.matcher(cleaned);
+        while (matcher.find()) {
+            list.add(matcher.group().trim());
+        }
         return list;
     }
 
-    /**
-     * Generate MCQ questions from text and save to DB. Returns generated questions.
-     */
     public List<Question> generateAndSave(Long subjectId, Long documentId, String text) {
         List<String> sentences = extractSentences(text).stream()
                 .filter(s -> s.length() >= MIN_SENTENCE_LENGTH)
                 .collect(Collectors.toList());
-        if (sentences.isEmpty())
+        if (sentences.isEmpty()) {
             return Collections.emptyList();
+        }
 
         questionRepository.deleteByDocumentId(documentId);
 
-        List<String> keywordPool = buildKeywordPool(text);
+        Map<String, String> displayTerms = buildDisplayTerms(text);
+        List<String> conceptKeywords = extractConceptKeywords(text);
+        List<String> allKeywords = buildKeywordPool(text);
         Random random = new Random((documentId != null ? documentId : 0L) + text.length());
 
         List<Question> questions = new ArrayList<>();
         Set<String> seenQuestions = new HashSet<>();
+
         for (String sentence : sentences) {
-            Question q = buildSentenceQuestion(subjectId, documentId, sentence, keywordPool, random);
-            if (q == null || !seenQuestions.add(q.getQuestionText())) continue;
+            if (questions.size() >= REQUIRED_MIN_QUESTIONS) {
+                break;
+            }
+
+            String keyword = pickBestKeywordForSentence(sentence, conceptKeywords, allKeywords);
+            if (keyword == null) {
+                continue;
+            }
+
+            Question q = buildSentenceQuestion(
+                    subjectId,
+                    documentId,
+                    sentence,
+                    keyword,
+                    conceptKeywords,
+                    allKeywords,
+                    displayTerms,
+                    random,
+                    questions.size()
+            );
+            if (q == null || !seenQuestions.add(q.getQuestionText())) {
+                continue;
+            }
             questions.add(questionRepository.save(q));
         }
 
         if (questions.size() < REQUIRED_MIN_QUESTIONS) {
-            addFallbackQuestions(subjectId, documentId, text, questions, keywordPool, random, seenQuestions);
+            addFallbackQuestions(subjectId, documentId, sentences, conceptKeywords, allKeywords, displayTerms, questions, random, seenQuestions);
         }
 
         return questions;
@@ -77,44 +103,46 @@ public class McqGeneratorService {
     private void addFallbackQuestions(
             Long subjectId,
             Long documentId,
-            String text,
+            List<String> sentences,
+            List<String> conceptKeywords,
+            List<String> allKeywords,
+            Map<String, String> displayTerms,
             List<Question> questions,
-            List<String> keywordPool,
             Random random,
             Set<String> seenQuestions
     ) {
-        String[] templates = new String[] {
-                "Which term is most central to this topic summary?",
-                "Which keyword appears as an important concept in the notes?",
-                "Which term best fits the study material?",
-                "Which concept is emphasized in this document?",
-                "Which keyword is most likely part of the core content?"
-        };
+        if (sentences.isEmpty()) {
+            return;
+        }
 
-        int i = 0;
-        while (questions.size() < REQUIRED_MIN_QUESTIONS) {
-            String template = templates[i % templates.length];
-            String hint = truncate(text, 140);
-            String questionText = template + " Context: \"" + hint + "\"";
-            if (seenQuestions.contains(questionText)) {
-                i++;
+        List<String> shuffledSentences = new ArrayList<>(sentences);
+        Collections.shuffle(shuffledSentences, random);
+
+        for (String sentence : shuffledSentences) {
+            if (questions.size() >= REQUIRED_MIN_QUESTIONS) {
+                return;
+            }
+
+            String keyword = pickBestKeywordForSentence(sentence, allKeywords, conceptKeywords);
+            if (keyword == null) {
                 continue;
             }
 
-            List<String> options = buildOptionSet(
-                    pickBestKeyword(keywordPool, random),
-                    keywordPool,
-                    random
+            Question q = buildSentenceQuestion(
+                    subjectId,
+                    documentId,
+                    sentence,
+                    keyword,
+                    conceptKeywords,
+                    allKeywords,
+                    displayTerms,
+                    random,
+                    questions.size()
             );
-            if (options.size() < 4) {
-                i++;
+            if (q == null || !seenQuestions.add(q.getQuestionText())) {
                 continue;
             }
-
-            Question q = buildQuestionWithOptions(subjectId, documentId, questionText, options, options.get(0), random);
-            seenQuestions.add(questionText);
             questions.add(questionRepository.save(q));
-            i++;
         }
     }
 
@@ -122,171 +150,75 @@ public class McqGeneratorService {
             Long subjectId,
             Long documentId,
             String sentence,
-            List<String> keywordPool,
-            Random random
+            String keyword,
+            List<String> conceptKeywords,
+            List<String> allKeywords,
+            Map<String, String> displayTerms,
+            Random random,
+            int questionIndex
     ) {
-        String keyword = pickKeywordFromSentence(sentence, keywordPool);
-        if (keyword == null) {
-            return null;
+        if (questionIndex % 2 == 0) {
+            Question cloze = buildClozeFillQuestion(subjectId, documentId, sentence, keyword, conceptKeywords, allKeywords, displayTerms, random);
+            if (cloze != null) {
+                return cloze;
+            }
         }
-
-        // Cycle through different question types for variety
-        int questionType = random.nextInt(5);
-        
-        return switch (questionType) {
-            case 0 -> buildClozeFillQuestion(subjectId, documentId, sentence, keyword, keywordPool, random);
-            case 1 -> buildDefinitionQuestion(subjectId, documentId, keyword, keywordPool, random);
-            case 2 -> buildConceptualQuestion(subjectId, documentId, keyword, keywordPool, random);
-            case 3 -> buildRelationshipQuestion(subjectId, documentId, sentence, keyword, keywordPool, random);
-            default -> buildDescriptiveQuestion(subjectId, documentId, sentence, keyword, keywordPool, random);
-        };
+        return buildConceptQuestion(subjectId, documentId, sentence, keyword, conceptKeywords, allKeywords, displayTerms, random);
     }
 
-    /**
-     * Type 1: Fill-in-the-blank cloze question
-     */
     private Question buildClozeFillQuestion(
             Long subjectId,
             Long documentId,
             String sentence,
             String keyword,
-            List<String> keywordPool,
+            List<String> conceptKeywords,
+            List<String> allKeywords,
+            Map<String, String> displayTerms,
             Random random
     ) {
+        String displayKeyword = displayTerm(keyword, displayTerms);
         String masked = sentence.replaceFirst("(?i)\\b" + Pattern.quote(keyword) + "\\b", "_____");
-        String questionText = "Complete the blank from your notes: \"" + truncate(masked, 160) + "\"";
+        if (masked.equals(sentence)) {
+            return null;
+        }
 
-        List<String> options = buildOptionSet(keyword, keywordPool, random);
+        String questionText = "Choose the correct word to complete the sentence. \"" + truncate(masked, 180) + "\"";
+        List<String> options = buildSemanticOptions(keyword, conceptKeywords, allKeywords, displayTerms, random);
         if (options.size() < 4) {
             return null;
         }
-        return buildQuestionWithOptions(subjectId, documentId, questionText, options, keyword, random);
+        return buildQuestionWithOptions(subjectId, documentId, questionText, options, displayKeyword, random);
     }
 
-    /**
-     * Type 2: Definition/meaning question
-     */
-    private Question buildDefinitionQuestion(
-            Long subjectId,
-            Long documentId,
-            String keyword,
-            List<String> keywordPool,
-            Random random
-    ) {
-        String[] templates = new String[]{
-            "In the context of your notes, what does '%s' refer to?",
-            "Which best describes the meaning of '%s' based on the study material?",
-            "What is the primary definition of '%s' in your notes?",
-            "Which statement best explains '%s'?"
-        };
-        
-        String template = templates[random.nextInt(templates.length)];
-        String questionText = String.format(template, keyword);
-
-        List<String> options = buildOptionSet(keyword, keywordPool, random);
-        if (options.size() < 4) {
-            return null;
-        }
-        return buildQuestionWithOptions(subjectId, documentId, questionText, options, keyword, random);
-    }
-
-    /**
-     * Type 3: Conceptual question - why/importance
-     */
-    private Question buildConceptualQuestion(
-            Long subjectId,
-            Long documentId,
-            String keyword,
-            List<String> keywordPool,
-            Random random
-    ) {
-        String[] templates = new String[]{
-            "Why is '%s' important in this study material?",
-            "What is the significance of '%s' based on your notes?",
-            "Which option best explains the role of '%s'?",
-            "Why would '%s' be emphasized in these notes?"
-        };
-        
-        String template = templates[random.nextInt(templates.length)];
-        String questionText = String.format(template, keyword);
-
-        List<String> options = buildOptionSet(keyword, keywordPool, random);
-        if (options.size() < 4) {
-            return null;
-        }
-        return buildQuestionWithOptions(subjectId, documentId, questionText, options, keyword, random);
-    }
-
-    /**
-     * Type 4: Relationship question - what relates to/connects with
-     */
-    private Question buildRelationshipQuestion(
+    private Question buildConceptQuestion(
             Long subjectId,
             Long documentId,
             String sentence,
             String keyword,
-            List<String> keywordPool,
+            List<String> conceptKeywords,
+            List<String> allKeywords,
+            Map<String, String> displayTerms,
             Random random
     ) {
-        String[] templates = new String[]{
-            "Which concept is most closely related to '%s'?",
-            "What is most often associated with '%s' based on the notes?",
-            "Which of these connects best with '%s'?",
-            "In your study material, '%s' is most related to:"
-        };
-        
-        String template = templates[random.nextInt(templates.length)];
-        String questionText = String.format(template, keyword);
-
-        // Pick related keywords from pool
-        List<String> relatedOptions = new ArrayList<>(keywordPool);
-        Collections.shuffle(relatedOptions, random);
-        LinkedHashSet<String> options = new LinkedHashSet<>();
-        options.add(keyword);
-        for (String opt : relatedOptions) {
-            if (!opt.equalsIgnoreCase(keyword) && options.size() < 4) {
-                options.add(opt);
-            }
+        String displayKeyword = displayTerm(keyword, displayTerms);
+        String normalizedSentence = normalizeSentenceForQuestion(sentence);
+        if (normalizedSentence == null) {
+            return null;
+        }
+        String questionText;
+        if (looksLikeAcronym(displayKeyword)) {
+            questionText = "What is the main function of " + displayKeyword + "?";
+        } else if (looksLikeContainerConcept(displayKeyword)) {
+            questionText = "What is meant by \"" + displayKeyword + "\" in this context?";
+        } else {
+            questionText = "Which statement best describes \"" + displayKeyword + "\"?";
         }
 
-        if (options.size() < 4) {
-            options.add("abstract");
-            options.add("practical");
-            options.add("theoretical");
-        }
-
-        List<String> optionsList = new ArrayList<>(options).subList(0, Math.min(4, options.size()));
-        if (optionsList.size() < 4) return null;
-
-        return buildQuestionWithOptions(subjectId, documentId, questionText, optionsList, keyword, random);
-    }
-
-    /**
-     * Type 5: Descriptive question - characteristics/features
-     */
-    private Question buildDescriptiveQuestion(
-            Long subjectId,
-            Long documentId,
-            String sentence,
-            String keyword,
-            List<String> keywordPool,
-            Random random
-    ) {
-        String[] templates = new String[]{
-            "Which statement best describes '%s'?",
-            "Which of the following is true about '%s'?",
-            "Based on the material, '%s' can be characterized as:",
-            "What feature is most associated with '%s'?"
-        };
-        
-        String template = templates[random.nextInt(templates.length)];
-        String questionText = String.format(template, keyword);
-
-        List<String> options = buildOptionSet(keyword, keywordPool, random);
+        List<String> options = buildConceptOptions(keyword, normalizedSentence, conceptKeywords, allKeywords, displayTerms, random);
         if (options.size() < 4) {
             return null;
         }
-        return buildQuestionWithOptions(subjectId, documentId, questionText, options, keyword, random);
+        return buildQuestionWithOptions(subjectId, documentId, questionText, options, displayKeyword, random);
     }
 
     private Question buildQuestionWithOptions(
@@ -326,13 +258,25 @@ public class McqGeneratorService {
         return "A";
     }
 
+    private Map<String, String> buildDisplayTerms(String text) {
+        Map<String, String> displayTerms = new HashMap<>();
+        Matcher matcher = TOKEN.matcher(text);
+        while (matcher.find()) {
+            String original = matcher.group();
+            String normalized = original.toLowerCase(Locale.ROOT);
+            displayTerms.putIfAbsent(normalized, normalizeDisplayToken(original));
+        }
+        return displayTerms;
+    }
+
     private List<String> buildKeywordPool(String text) {
         Map<String, Integer> counts = new HashMap<>();
-        java.util.regex.Matcher matcher = TOKEN.matcher(text);
+        Matcher matcher = TOKEN.matcher(text);
         while (matcher.find()) {
             String token = matcher.group().toLowerCase(Locale.ROOT);
-            if (token.length() < 4 || STOPWORDS.contains(token)) continue;
-            counts.merge(token, 1, Integer::sum);
+            if (token.length() >= 4 && !STOPWORDS.contains(token)) {
+                counts.merge(token, 1, Integer::sum);
+            }
         }
 
         return counts.entrySet().stream()
@@ -342,13 +286,40 @@ public class McqGeneratorService {
                 .collect(Collectors.toList());
     }
 
-    private String pickKeywordFromSentence(String sentence, List<String> keywordPool) {
-        String lower = sentence.toLowerCase(Locale.ROOT);
-        for (String token : keywordPool) {
-            if (lower.contains(token)) return token;
+    private List<String> extractConceptKeywords(String text) {
+        Map<String, Integer> counts = new HashMap<>();
+        Matcher matcher = TOKEN.matcher(text);
+        while (matcher.find()) {
+            String token = matcher.group().toLowerCase(Locale.ROOT);
+            if (token.length() >= 4 && !STOPWORDS.contains(token)) {
+                counts.merge(token, 1, Integer::sum);
+            }
         }
 
-        java.util.regex.Matcher matcher = TOKEN.matcher(sentence);
+        return counts.entrySet().stream()
+                .sorted((a, b) -> Integer.compare(b.getValue(), a.getValue()))
+                .map(Map.Entry::getKey)
+                .limit(40)
+                .collect(Collectors.toList());
+    }
+
+    private String pickBestKeywordForSentence(String sentence, List<String> primaryPool, List<String> secondaryPool) {
+        String lower = sentence.toLowerCase(Locale.ROOT);
+        for (String token : primaryPool) {
+            if (containsWholeWord(lower, token)) {
+                return token;
+            }
+        }
+        for (String token : secondaryPool) {
+            if (containsWholeWord(lower, token)) {
+                return token;
+            }
+        }
+        return pickKeywordFromSentence(sentence);
+    }
+
+    private String pickKeywordFromSentence(String sentence) {
+        Matcher matcher = TOKEN.matcher(sentence);
         while (matcher.find()) {
             String token = matcher.group().toLowerCase(Locale.ROOT);
             if (token.length() >= 4 && !STOPWORDS.contains(token)) {
@@ -358,36 +329,183 @@ public class McqGeneratorService {
         return null;
     }
 
-    private String pickBestKeyword(List<String> keywordPool, Random random) {
-        if (keywordPool.isEmpty()) return "core concept";
-        int bound = Math.min(10, keywordPool.size());
-        return keywordPool.get(random.nextInt(bound));
+    private boolean containsWholeWord(String sentence, String token) {
+        return Pattern.compile("(?i)\\b" + Pattern.quote(token) + "\\b").matcher(sentence).find();
     }
 
-    private List<String> buildOptionSet(String correct, List<String> keywordPool, Random random) {
+    private List<String> buildSemanticOptions(
+            String correctAnswer,
+            List<String> primaryPool,
+            List<String> fallbackPool,
+            Map<String, String> displayTerms,
+            Random random
+    ) {
         LinkedHashSet<String> options = new LinkedHashSet<>();
-        options.add(correct);
+        options.add(displayTerm(correctAnswer, displayTerms));
 
-        List<String> candidates = new ArrayList<>(keywordPool);
+        addMatchingCandidates(options, correctAnswer, primaryPool, displayTerms, random);
+        if (options.size() < 4) {
+            addMatchingCandidates(options, correctAnswer, fallbackPool, displayTerms, random);
+        }
+
+        return new ArrayList<>(options);
+    }
+
+    private List<String> buildConceptOptions(
+            String correctAnswer,
+            String sentence,
+            List<String> primaryPool,
+            List<String> fallbackPool,
+            Map<String, String> displayTerms,
+            Random random
+    ) {
+        LinkedHashSet<String> options = new LinkedHashSet<>();
+        options.add(displayTerm(correctAnswer, displayTerms));
+
+        addSentenceBasedCandidates(options, correctAnswer, sentence, displayTerms);
+        addMatchingCandidates(options, correctAnswer, primaryPool, displayTerms, random);
+        if (options.size() < 4) {
+            addMatchingCandidates(options, correctAnswer, fallbackPool, displayTerms, random);
+        }
+
+        return new ArrayList<>(options);
+    }
+
+    private void addSentenceBasedCandidates(
+            LinkedHashSet<String> options,
+            String correctAnswer,
+            String sentence,
+            Map<String, String> displayTerms
+    ) {
+        Matcher matcher = TOKEN.matcher(sentence);
+        while (matcher.find()) {
+            if (options.size() >= 4) {
+                return;
+            }
+            String token = matcher.group().toLowerCase(Locale.ROOT);
+            if (token.equalsIgnoreCase(correctAnswer)) {
+                continue;
+            }
+            if (!isCompatibleDistractor(correctAnswer, token)) {
+                continue;
+            }
+            options.add(displayTerm(token, displayTerms));
+        }
+    }
+
+    private void addMatchingCandidates(
+            LinkedHashSet<String> options,
+            String correctAnswer,
+            List<String> pool,
+            Map<String, String> displayTerms,
+            Random random
+    ) {
+        List<String> candidates = new ArrayList<>(pool);
         Collections.shuffle(candidates, random);
         for (String candidate : candidates) {
-            if (!candidate.equalsIgnoreCase(correct)) {
-                options.add(candidate);
+            if (options.size() >= 4) {
+                return;
             }
-            if (options.size() == 4) break;
+            if (candidate.equalsIgnoreCase(correctAnswer)) {
+                continue;
+            }
+            if (!isCompatibleDistractor(correctAnswer, candidate)) {
+                continue;
+            }
+            options.add(displayTerm(candidate, displayTerms));
+        }
+    }
+
+    private boolean isCompatibleDistractor(String correct, String candidate) {
+        if (candidate == null || candidate.length() < 3) {
+            return false;
+        }
+        if (STOPWORDS.contains(candidate.toLowerCase(Locale.ROOT))) {
+            return false;
+        }
+        boolean correctAcronym = isAcronymLike(correct);
+        boolean candidateAcronym = isAcronymLike(candidate);
+        if (correctAcronym != candidateAcronym) {
+            return false;
+        }
+        if (candidate.equals(candidate.toUpperCase(Locale.ROOT)) && !correctAcronym) {
+            return false;
+        }
+        if (candidate.equalsIgnoreCase("while") || candidate.equalsIgnoreCase("even") || candidate.equalsIgnoreCase("across")) {
+            return false;
+        }
+        if (candidate.equalsIgnoreCase("important") || candidate.equalsIgnoreCase("ensuring") || candidate.equalsIgnoreCase("these")) {
+            return false;
         }
 
-        if (options.size() < 4) {
-            options.add("generalization");
-            options.add("assumption");
-            options.add("outlier");
-        }
+        int correctLength = correct.length();
+        int candidateLength = candidate.length();
+        return Math.abs(correctLength - candidateLength) <= Math.max(4, correctLength / 2);
+    }
 
-        return new ArrayList<>(options).subList(0, 4);
+    private boolean isAcronymLike(String token) {
+        return token.length() <= 6 && token.equals(token.toUpperCase(Locale.ROOT));
+    }
+
+    private String displayTerm(String token, Map<String, String> displayTerms) {
+        return displayTerms.getOrDefault(token.toLowerCase(Locale.ROOT), normalizeDisplayToken(token));
+    }
+
+    private String normalizeDisplayToken(String token) {
+        if (token == null || token.isBlank()) {
+            return token;
+        }
+        if (token.equals(token.toUpperCase(Locale.ROOT)) && token.length() <= 6 && token.matches("[A-Z0-9]+")) {
+            return token.toUpperCase(Locale.ROOT);
+        }
+        return token.substring(0, 1).toUpperCase(Locale.ROOT) + token.substring(1).toLowerCase(Locale.ROOT);
     }
 
     private static String truncate(String s, int max) {
-        if (s == null || s.length() <= max) return s;
+        if (s == null || s.length() <= max) {
+            return s;
+        }
         return s.substring(0, max) + "...";
+    }
+
+    private static String truncateToSentenceBoundary(String s, int max) {
+        if (s == null || s.length() <= max) {
+            return s;
+        }
+        int boundary = Math.max(s.lastIndexOf(' ', max), s.lastIndexOf(',', max));
+        if (boundary < max / 2) {
+            boundary = max;
+        }
+        return s.substring(0, boundary).trim() + "...";
+    }
+
+    private String normalizeSentenceForQuestion(String sentence) {
+        if (sentence == null) {
+            return null;
+        }
+        String cleaned = sentence.replaceAll("\\s+", " ").trim();
+        if (cleaned.length() > 220) {
+            return null;
+        }
+        if (cleaned.endsWith("...")) {
+            return null;
+        }
+        if (!cleaned.endsWith(".") && !cleaned.endsWith("?") && !cleaned.endsWith("!")) {
+            cleaned = cleaned + ".";
+        }
+        return cleaned;
+    }
+
+    private boolean looksLikeAcronym(String token) {
+        return token != null && token.length() <= 6 && token.equals(token.toUpperCase(Locale.ROOT));
+    }
+
+    private boolean looksLikeContainerConcept(String token) {
+        if (token == null) {
+            return false;
+        }
+        String normalized = token.toLowerCase(Locale.ROOT);
+        return normalized.equals("database") || normalized.equals("table") || normalized.equals("record")
+                || normalized.equals("attribute") || normalized.equals("schema");
     }
 }

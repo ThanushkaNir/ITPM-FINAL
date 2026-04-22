@@ -22,6 +22,19 @@ function KnowledgeBase() {
   const [form, setForm] = useState({ title: '', category: '', content: '' });
   const [categoryFilter, setCategoryFilter] = useState('');
   const [formErrors, setFormErrors] = useState({ title: '', category: '', content: '', submit: '' });
+  const [chatQuestion, setChatQuestion] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatResponse, setChatResponse] = useState(null);
+  const [chatSuggestions, setChatSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
+  const [chatInputFocused, setChatInputFocused] = useState(false);
+  const defaultChatSuggestions = [
+    'How do I register for exams?',
+    'What are the university attendance rules?',
+    'How can I contact student support?',
+    'What is the assignment submission process?',
+  ];
 
   const validateForm = (values) => {
     const errors = { title: '', category: '', content: '', submit: '' };
@@ -126,6 +139,143 @@ function KnowledgeBase() {
     setShowForm(true);
   };
 
+  const askKnowledgeChatbot = async (e) => {
+    e.preventDefault();
+    if (!chatQuestion.trim()) return;
+
+    setChatLoading(true);
+    setChatResponse(null);
+    setShowSuggestions(false);
+    setActiveSuggestionIndex(-1);
+    try {
+      const res = await axios.post(`${API}/knowledge/chat`, { message: chatQuestion.trim() });
+      setChatResponse(res.data || null);
+    } catch (error) {
+      console.error(error);
+      setChatResponse({
+        answer: 'Could not connect to AI chatbot service.',
+        confidence: 0,
+        sources: [],
+        fallback: true,
+      });
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const handleChatInputChange = (value) => {
+    setChatQuestion(value);
+    setShowSuggestions(true);
+    setActiveSuggestionIndex(-1);
+  };
+
+  useEffect(() => {
+    const rawQuery = chatQuestion.trim();
+    const query = rawQuery.toLowerCase();
+
+    const getLocalSuggestions = () => {
+      if (!query) {
+        const titles = entries
+          .map((entry) => entry.title)
+          .filter((title) => title && title.trim().length > 0)
+          .filter((text, index, arr) => arr.indexOf(text) === index)
+          .slice(0, 6);
+        if (titles.length > 0) {
+          return titles;
+        }
+        return defaultChatSuggestions;
+      }
+
+      return entries
+        .filter((entry) => {
+          const title = (entry.title || '').toLowerCase();
+          const category = (entry.category || '').toLowerCase();
+          const content = (entry.content || '').toLowerCase();
+          return title.includes(query) || category.includes(query) || content.includes(query);
+        })
+        .flatMap((entry) => {
+          const list = [];
+          if (entry.title) list.push(entry.title);
+          if (entry.title) list.push(`What is ${entry.title}?`);
+          if (entry.category) list.push(`Explain ${entry.category} rules`);
+          return list;
+        })
+        .filter((text) => text && text.trim().length > 0)
+        .filter((text, index, arr) => arr.indexOf(text) === index)
+      .slice(0, 6);
+    };
+
+    const localSuggestions = getLocalSuggestions();
+    const fallbackSuggestions = localSuggestions.length > 0 ? localSuggestions : defaultChatSuggestions;
+    setChatSuggestions(fallbackSuggestions);
+    setShowSuggestions(chatInputFocused && fallbackSuggestions.length > 0);
+    setActiveSuggestionIndex(-1);
+
+    if (!rawQuery) {
+      return;
+    }
+
+    const timeout = setTimeout(async () => {
+      try {
+        const res = await axios.get(`${API}/knowledge/suggestions`, {
+          params: { q: rawQuery },
+        });
+        const remoteSuggestions = Array.isArray(res.data) ? res.data : [];
+        const merged = [...fallbackSuggestions, ...remoteSuggestions]
+          .filter((text) => text && text.trim().length > 0)
+          .filter((text, index, arr) => arr.indexOf(text) === index)
+          .slice(0, 6);
+        setChatSuggestions(merged);
+        setShowSuggestions(chatInputFocused && merged.length > 0);
+      } catch (error) {
+        // keep local suggestions only
+      }
+    }, 120);
+
+    return () => clearTimeout(timeout);
+  }, [chatQuestion, chatInputFocused, entries]);
+
+  const handleChatInputKeyDown = (e) => {
+    if (!showSuggestions || chatSuggestions.length === 0) {
+      if (e.key === 'Escape') {
+        setShowSuggestions(false);
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveSuggestionIndex((prev) => {
+        if (prev < chatSuggestions.length - 1) return prev + 1;
+        return 0;
+      });
+      return;
+    }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveSuggestionIndex((prev) => {
+        if (prev > 0) return prev - 1;
+        return chatSuggestions.length - 1;
+      });
+      return;
+    }
+
+    if (e.key === 'Enter' && activeSuggestionIndex >= 0 && activeSuggestionIndex < chatSuggestions.length) {
+      e.preventDefault();
+      setChatQuestion(chatSuggestions[activeSuggestionIndex]);
+      setShowSuggestions(false);
+      setActiveSuggestionIndex(-1);
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setShowSuggestions(false);
+      setActiveSuggestionIndex(-1);
+    }
+  };
+
   const categories = [...new Set(entries.map((e) => e.category).filter(Boolean))].sort();
 
   if (!userId) {
@@ -143,6 +293,72 @@ function KnowledgeBase() {
           <h1>Knowledge Base</h1>
           <p>University rules, regulations, and registration info. {isAdmin && 'Admins can add and edit entries.'}</p>
         </header>
+
+        <section className="card kb-chatbot-card">
+          <h3>AI Knowledge Chatbot</h3>
+          <p className="muted">Ask anything about registration, university rules, exams, and support processes.</p>
+          <form onSubmit={askKnowledgeChatbot} className="kb-chatbot-form">
+            <div className="kb-chat-input-wrap">
+              <input
+                type="text"
+                placeholder="Ask a question..."
+                value={chatQuestion}
+                onChange={(e) => handleChatInputChange(e.target.value)}
+                onKeyDown={handleChatInputKeyDown}
+                onFocus={() => {
+                  setChatInputFocused(true);
+                  setShowSuggestions(true);
+                }}
+                onBlur={() => setTimeout(() => {
+                  setChatInputFocused(false);
+                  setShowSuggestions(false);
+                  setActiveSuggestionIndex(-1);
+                }, 150)}
+                disabled={chatLoading}
+              />
+              {showSuggestions && (
+                <ul className="kb-suggestions">
+                  {chatSuggestions.map((suggestion, index) => (
+                    <li key={`${suggestion}-${index}`}>
+                      <button
+                        type="button"
+                        className={`kb-suggestion-btn ${activeSuggestionIndex === index ? 'active' : ''}`}
+                        onClick={() => {
+                          setChatQuestion(suggestion);
+                          setShowSuggestions(false);
+                          setActiveSuggestionIndex(-1);
+                        }}
+                      >
+                        {suggestion}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <button type="submit" className="btn btn-primary" disabled={chatLoading}>
+              {chatLoading ? 'Thinking...' : 'Ask AI'}
+            </button>
+          </form>
+
+          {chatResponse && (
+            <div className="kb-chatbot-response">
+              <p className="kb-chatbot-answer">{chatResponse.answer}</p>
+              <p className="kb-chatbot-meta">
+                Confidence: {Math.round((Number(chatResponse.confidence || 0)) * 100)}%
+              </p>
+              {Array.isArray(chatResponse.sources) && chatResponse.sources.length > 0 && (
+                <ul className="kb-chatbot-sources">
+                  {chatResponse.sources.map((source) => (
+                    <li key={source.id}>
+                      {source.title} {source.category ? `(${source.category})` : ''}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </section>
 
         {isAdmin && (
           <>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import '../Login/Login.css';
 import './Register.css';
@@ -11,6 +11,7 @@ const ROLES = [
 ];
 
 function Register() {
+  const navigate = useNavigate();
   const [user, setUser] = useState({ name: '', email: '', password: '', role: 'STUDENT', year: null });
   const [showPw, setShowPw]   = useState(false);
   const [loading, setLoading] = useState(false);
@@ -32,7 +33,7 @@ function Register() {
       await axios.post('http://localhost:8080/user', payload);
       alert('🎉 Registered successfully! Please sign in.');
       setUser({ name: '', email: '', password: '', role: 'STUDENT', year: null });
-      window.location.href = '/login';
+      navigate('/login');
     } catch (error) {
       const msg =
         typeof error.response?.data === 'string'

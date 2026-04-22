@@ -1,9 +1,11 @@
 package backend.Controller;
 
 import backend.Model.KnowledgeEntry;
+import backend.Model.KnowledgeChatResponse;
 import backend.Model.SupportTicket;
 import backend.Repository.KnowledgeEntryRepository;
 import backend.Repository.SupportTicketRepository;
+import backend.Service.KnowledgeChatService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +25,9 @@ public class InquiryController {
 
     @Autowired
     private SupportTicketRepository supportTicketRepository;
+
+    @Autowired
+    private KnowledgeChatService knowledgeChatService;
 
     /**
      * Automated inquiry: search knowledge base by question/keywords.
@@ -64,19 +69,30 @@ public class InquiryController {
 
         List<KnowledgeEntry> answers = knowledgeRepository.search(question);
         Map<String, Object> result = new HashMap<>();
-        result.put("answered", !answers.isEmpty());
         result.put("answers", answers);
 
         if (!answers.isEmpty()) {
+            result.put("answered", true);
             result.put("message", "Answer found from university knowledge base.");
+            result.put("generalAiAnswer", false);
+            result.put("answerSource", "knowledge-base");
+            result.put("aiAnswer", "");
             result.put("ticketCreated", false);
             return ResponseEntity.ok(result);
         }
 
-        result.put("message", "No direct answer found.");
+        // No KB matches: use AI fallback (OpenAI/Gemini) if available
+        KnowledgeChatResponse ai = knowledgeChatService.ask(question);
+        boolean hasAiAnswer = ai != null && ai.getAnswer() != null && !ai.getAnswer().isBlank() && !ai.isFallback();
+        result.put("answered", hasAiAnswer);
+        result.put("generalAiAnswer", hasAiAnswer && ai.isGeneralAiAnswer());
+        result.put("answerSource", ai != null ? ai.getAnswerSource() : "fallback");
+        result.put("aiAnswer", hasAiAnswer ? ai.getAnswer() : "");
+        result.put("message", hasAiAnswer ? "Answer provided by AI." : "No direct answer found.");
         result.put("ticketCreated", false);
 
-        if (autoTicket && userId != null) {
+        // Auto ticket only when there is no KB answer AND no AI answer
+        if (!hasAiAnswer && autoTicket && userId != null) {
             SupportTicket ticket = new SupportTicket();
             String shortQ = question.length() > 80 ? question.substring(0, 80) + "..." : question;
             ticket.setUserId(userId);

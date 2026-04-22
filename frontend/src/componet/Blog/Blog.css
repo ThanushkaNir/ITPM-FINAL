@@ -14,6 +14,7 @@
 .blog-card h3 { font-size: 1.15rem; margin-bottom: 8px; }
 .blog-meta { font-size: 0.85rem; color: var(--color-text-muted); margin-bottom: 8px; }
 .blog-preview { color: var(--color-text-muted); font-size: 0.95rem; line-height: 1.5; }
+.blog-card-actions { margin-top: 12px; display: flex; justify-content: flex-end; }
 .blog-full { max-width: 720px; margin-bottom: 24px; padding: 28px; }
 .blog-full .back-btn { background: none; border: none; color: var(--color-primary); cursor: pointer; margin-bottom: 16px; font-size: 0.95rem; }
 .blog-full h2 { margin-bottom: 8px; }

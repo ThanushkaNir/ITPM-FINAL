@@ -36,6 +36,9 @@ public class Assignment {
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    @Column(name = "completed_at")
+    private LocalDateTime completedAt;
+
     public Assignment() {}
 
     public Long getId() { return id; }
@@ -56,4 +59,6 @@ public class Assignment {
     public void setStatus(String status) { this.status = status; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public LocalDateTime getCompletedAt() { return completedAt; }
+    public void setCompletedAt(LocalDateTime completedAt) { this.completedAt = completedAt; }
 }

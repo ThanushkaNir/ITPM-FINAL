@@ -293,6 +293,7 @@ public class StudyDocumentController {
             return null;
         }
 
+        // Try ISO format first (YYYY-MM-DD)
         Matcher iso = ISO_DATE_PATTERN.matcher(text);
         if (iso.find()) {
             try {
@@ -304,6 +305,7 @@ public class StudyDocumentController {
             }
         }
 
+        // Try DMY format (DD-MM-YYYY or MM-DD-YYYY)
         Matcher dmy = DMY_DATE_PATTERN.matcher(text);
         if (dmy.find()) {
             int first = Integer.parseInt(dmy.group(1));
@@ -330,17 +332,29 @@ public class StudyDocumentController {
             }
         }
 
-        String[] namedDateFormats = new String[] {
-                "d MMM uuuu", "d MMMM uuuu", "MMM d, uuuu", "MMMM d, uuuu"
+        // Try named month formats with ordinal support: "14th April 2026", "April 14th, 2026", "April 14, 2026", "14 April 2026"
+        String[] namedDatePatterns = new String[] {
+                "\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+([A-Za-z]{3,9})\\s+(\\d{4})\\b",  // "14th April 2026" or "14 April 2026"
+                "\\b([A-Za-z]{3,9})\\s+(\\d{1,2})(?:st|nd|rd|th)?,\\s*(\\d{4})\\b"   // "April 14th, 2026" or "April 14, 2026"
         };
-        for (String pattern : namedDateFormats) {
-            try {
-                DateTimeFormatter formatter = DateTimeFormatter.ofPattern(pattern, Locale.ENGLISH);
-                Matcher words = Pattern.compile("\\b[A-Za-z]{3,9}\\s+\\d{1,2},\\s*\\d{4}|\\b\\d{1,2}\\s+[A-Za-z]{3,9}\\s+\\d{4}").matcher(text);
-                if (words.find()) {
-                    return LocalDate.parse(words.group().trim(), formatter);
+
+        String[] dateFormats = new String[] {
+                "d MMMM uuuu",  // "14 April 2026"
+                "MMMM d uuuu"   // "April 14 2026"
+        };
+
+        for (int i = 0; i < namedDatePatterns.length; i++) {
+            Matcher matcher = Pattern.compile(namedDatePatterns[i], Pattern.CASE_INSENSITIVE).matcher(text);
+            if (matcher.find()) {
+                try {
+                    String matched = matcher.group().trim();
+                    // Remove ordinal suffixes for parsing
+                    String normalized = matched.replaceAll("(?:st|nd|rd|th)", "");
+                    
+                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern(dateFormats[i], Locale.ENGLISH);
+                    return LocalDate.parse(normalized, formatter);
+                } catch (DateTimeParseException ignored) {
                 }
-            } catch (DateTimeParseException ignored) {
             }
         }
 

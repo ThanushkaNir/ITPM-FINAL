@@ -392,6 +392,11 @@
   color: var(--color-success);
 }
 
+.day-pill.late {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+}
+
 .more-pill {
   background: var(--color-bg-elevated);
   color: var(--color-text-muted);

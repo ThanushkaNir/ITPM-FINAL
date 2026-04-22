@@ -47,19 +47,17 @@ public class FlashcardGeneratorService {
         LinkedHashSet<String> seenFronts = new LinkedHashSet<>();
         for (String point : points) {
             String keyword = pickKeyword(point, keywordPool);
-            String front = keyword == null
-                    ? "Explain this idea in simple terms."
-                    : "What does \"" + keyword + "\" refer to in your notes?";
+            String front = buildFrontPrompt(point, keyword);
 
             if (!seenFronts.add(front)) {
-                front = "Complete and explain: \"" + truncate(maskSentence(point, keyword), 120) + "\"";
+                front = buildFallbackPrompt(point, keyword);
             }
 
             Flashcard card = new Flashcard();
             card.setSubjectId(subjectId);
             card.setDocumentId(documentId);
             card.setFrontText(front);
-            card.setBackText(truncate(point, 220));
+            card.setBackText(normalizeBackText(point));
             cards.add(flashcardRepository.save(card));
         }
 
@@ -70,10 +68,8 @@ public class FlashcardGeneratorService {
             Flashcard card = new Flashcard();
             card.setSubjectId(subjectId);
             card.setDocumentId(documentId);
-            card.setFrontText(keyword == null
-                    ? "Summarize this concept in one line."
-                    : "Why is \"" + keyword + "\" important here?");
-            card.setBackText(truncate(point, 220));
+            card.setFrontText(buildReviewPrompt(point, keyword));
+            card.setBackText(normalizeBackText(point));
             cards.add(flashcardRepository.save(card));
             index++;
         }
@@ -133,6 +129,70 @@ public class FlashcardGeneratorService {
             if (token.length() >= 4 && !STOPWORDS.contains(token)) return token;
         }
         return null;
+    }
+
+    private String buildFrontPrompt(String point, String keyword) {
+        if (keyword == null) {
+            return "What is the main idea of this concept?";
+        }
+
+        String displayKeyword = toDisplayTerm(keyword);
+        String lowerPoint = point.toLowerCase(Locale.ROOT);
+        if (lowerPoint.contains(" is ") || lowerPoint.contains(" are ")) {
+            return "Define \"" + displayKeyword + "\".";
+        }
+        if (lowerPoint.contains(" used to ") || lowerPoint.contains(" used for ") || lowerPoint.contains(" purpose ")) {
+            return "What is the function of \"" + displayKeyword + "\"?";
+        }
+        if (lowerPoint.contains(" consists of ") || lowerPoint.contains(" includes ") || lowerPoint.contains(" contains ")) {
+            return "What does \"" + displayKeyword + "\" include?";
+        }
+        if (lowerPoint.contains(" important ") || lowerPoint.contains(" ensures ") || lowerPoint.contains(" helps ")) {
+            return "Why is \"" + displayKeyword + "\" important?";
+        }
+        return "Which concept is described by this statement?";
+    }
+
+    private String buildFallbackPrompt(String point, String keyword) {
+        String masked = truncate(maskSentence(point, keyword), 140);
+        return "Complete the statement: \"" + masked + "\"";
+    }
+
+    private String buildReviewPrompt(String point, String keyword) {
+        if (keyword == null) {
+            return "Summarize this concept in one sentence.";
+        }
+        String displayKeyword = toDisplayTerm(keyword);
+        String lowerPoint = point.toLowerCase(Locale.ROOT);
+        if (lowerPoint.contains(" advantage ") || lowerPoint.contains(" benefit ")) {
+            return "What is an advantage of \"" + displayKeyword + "\"?";
+        }
+        if (lowerPoint.contains(" manage ") || lowerPoint.contains(" control ")) {
+            return "How does \"" + displayKeyword + "\" help in this topic?";
+        }
+        return "Explain \"" + displayKeyword + "\" in simple terms.";
+    }
+
+    private String normalizeBackText(String point) {
+        String cleaned = truncate(point == null ? "" : point.trim(), 220);
+        if (cleaned.isEmpty()) {
+            return cleaned;
+        }
+        char last = cleaned.charAt(cleaned.length() - 1);
+        if (last != '.' && last != '!' && last != '?') {
+            cleaned = cleaned + ".";
+        }
+        return cleaned;
+    }
+
+    private String toDisplayTerm(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return keyword;
+        }
+        if (keyword.length() <= 6 && keyword.matches("[A-Za-z0-9]+")) {
+            return keyword.toUpperCase(Locale.ROOT);
+        }
+        return keyword.substring(0, 1).toUpperCase(Locale.ROOT) + keyword.substring(1).toLowerCase(Locale.ROOT);
     }
 
     private static String truncate(String value, int max) {

@@ -196,6 +196,20 @@ function Blog() {
                   <h3>{p.title}</h3>
                   <p className="blog-meta">{formatDate(p.createdAt)}</p>
                   <p className="blog-preview">{p.content?.slice(0, 120)}…</p>
+                  {isAlumni && (
+                    <div className="blog-card-actions">
+                      <button
+                        type="button"
+                        className="btn-sm btn-danger"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deletePost(p.id);
+                        }}
+                      >
+                        Delete Blog
+                      </button>
+                    </div>
+                  )}
                 </article>
               ))
             )}

@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @RestController
@@ -76,6 +77,11 @@ public class AssignmentController {
             assignment.setSubject(assignment.getSubject().trim());
         }
         assignment.setStatus(normalizeStatus(assignment.getStatus()));
+        if ("COMPLETED".equals(assignment.getStatus())) {
+            assignment.setCompletedAt(LocalDateTime.now());
+        } else {
+            assignment.setCompletedAt(null);
+        }
         return assignmentRepository.save(assignment);
     }
 
@@ -88,7 +94,17 @@ public class AssignmentController {
                     if (body.getSubjectId() != null) a.setSubjectId(body.getSubjectId());
                     if (body.getDueDate() != null) a.setDueDate(body.getDueDate());
                     if (body.getDueTime() != null) a.setDueTime(body.getDueTime());
-                    if (body.getStatus() != null) a.setStatus(normalizeStatus(body.getStatus()));
+                    if (body.getStatus() != null) {
+                        String nextStatus = normalizeStatus(body.getStatus());
+                        a.setStatus(nextStatus);
+                        if ("COMPLETED".equals(nextStatus)) {
+                            if (a.getCompletedAt() == null) {
+                                a.setCompletedAt(LocalDateTime.now());
+                            }
+                        } else {
+                            a.setCompletedAt(null);
+                        }
+                    }
                     return ResponseEntity.ok(assignmentRepository.save(a));
                 })
                 .orElse(ResponseEntity.notFound().build());
@@ -98,7 +114,15 @@ public class AssignmentController {
     public ResponseEntity<Assignment> updateStatus(@PathVariable Long id, @RequestParam String status) {
         return assignmentRepository.findById(id)
                 .map(a -> {
-                    a.setStatus(normalizeStatus(status));
+                    String nextStatus = normalizeStatus(status);
+                    a.setStatus(nextStatus);
+                    if ("COMPLETED".equals(nextStatus)) {
+                        if (a.getCompletedAt() == null) {
+                            a.setCompletedAt(LocalDateTime.now());
+                        }
+                    } else {
+                        a.setCompletedAt(null);
+                    }
                     return ResponseEntity.ok(assignmentRepository.save(a));
                 })
                 .orElse(ResponseEntity.notFound().build());

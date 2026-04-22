@@ -66,7 +66,7 @@ function Resume() {
       setContent('');
       setResumeFile(null);
       setShowForm(false);
-      loadResumes();
+      await loadResumes();
     } catch (e) {
       alert(e.response?.data || 'Failed to save resume');
     }

@@ -4,6 +4,28 @@ import axios from 'axios';
 import './StudyCalendar.css';
 
 const API = 'http://localhost:8080/api';
+const normalizeIsoDate = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') {
+    return value.includes('T') ? value.split('T')[0] : value;
+  }
+  return String(value);
+};
+
+const getAssignmentDisplayDate = (assignment) => {
+  if (assignment?.status === 'COMPLETED' && assignment?.completedAt) {
+    return normalizeIsoDate(assignment.completedAt);
+  }
+  return normalizeIsoDate(assignment?.dueDate);
+};
+
+const isLateSubmission = (assignment) => {
+  if (assignment?.status !== 'COMPLETED') return false;
+  const doneDate = normalizeIsoDate(assignment?.completedAt);
+  const dueDate = normalizeIsoDate(assignment?.dueDate);
+  if (!doneDate || !dueDate) return false;
+  return doneDate > dueDate;
+};
 
 function StudyCalendar() {
   const userId = localStorage.getItem('userId');
@@ -78,7 +100,7 @@ function StudyCalendar() {
       });
       setForm({ title: '', type: 'STUDY', details: '', slotDate: '', startTime: '09:00', endTime: '10:00' });
       setShowForm(false);
-      Promise.all([loadSlots(), loadAssignments()]);
+      await Promise.all([loadSlots(), loadAssignments()]);
     } catch (e) {
       alert('Failed to add slot');
     }
@@ -88,7 +110,7 @@ function StudyCalendar() {
     if (!window.confirm('Remove this study slot?')) return;
     try {
       await axios.delete(`${API}/study-slots/${id}`);
-      Promise.all([loadSlots(), loadAssignments()]);
+      await Promise.all([loadSlots(), loadAssignments()]);
     } catch (e) {
       alert('Failed to delete');
     }
@@ -102,9 +124,7 @@ function StudyCalendar() {
   }, {});
 
   const assignmentsByDate = (Array.isArray(assignments) ? assignments : []).reduce((acc, a) => {
-    const d = typeof a.dueDate === 'string' && a.dueDate.includes('T')
-      ? a.dueDate.split('T')[0]
-      : a.dueDate;
+    const d = getAssignmentDisplayDate(a);
     if (!d) return acc;
     if (!acc[d]) acc[d] = [];
     acc[d].push(a);
@@ -241,9 +261,19 @@ function StudyCalendar() {
                         <span
                           key={`a-${a.id}`}
                           className={`assignment-pill ${a.status === 'COMPLETED' ? 'done' : 'pending'}`}
-                          title={`${a.name} (${a.status === 'COMPLETED' ? 'Done' : 'Pending'})`}
+                          title={(() => {
+                            if (a.status === 'COMPLETED') {
+                              return `${a.name} (${isLateSubmission(a) ? 'Late Submit' : 'Done'} on ${getAssignmentDisplayDate(a)})`;
+                            }
+                            return `${a.name} (Pending, due ${normalizeIsoDate(a.dueDate)})`;
+                          })()}
                         >
-                          {a.name} - {a.status === 'COMPLETED' ? 'Done' : 'Pending'}
+                          {a.name} - {(() => {
+                            if (a.status !== 'COMPLETED') return 'Pending';
+                            return isLateSubmission(a)
+                              ? `Late Submit (${getAssignmentDisplayDate(a)})`
+                              : `Done (${getAssignmentDisplayDate(a)})`;
+                          })()}
                         </span>
                       ))}
                       {dayAssignments.length > 2 && (

@@ -44,9 +44,11 @@ function Dashboard() {
     { to: '/cover-letter', icon: '✉️', title: 'Cover Letter Maker', desc: 'Generate highly tailored opening letters for job applications.' },
   ];
 
+  const alumniCareerCards = careerCards.filter((card) => card.to !== '/career');
+
   const alumniCards = [
     { to: '/userProfile', icon: '👤', title: 'My Profile', desc: 'View and edit your personal account details.' },
-    ...careerCards,
+    ...alumniCareerCards,
     { to: '/inquiry', icon: '💬', title: 'Inquiry Assistant', desc: 'Access guidance and policy answers.' },
     { to: '/tickets', icon: '🎫', title: 'Support Tickets', desc: 'View and manage student support requests.' },
   ];

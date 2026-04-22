@@ -85,8 +85,9 @@ function Quiz() {
     }
 
     const answeredCount = Object.keys(answersRef.current).length;
-    if (answeredCount < questions.length) {
-      setSubmitValidationError(`Please answer all questions before submitting (${answeredCount}/${questions.length} answered).`);
+    const minimumRequiredAnswers = Math.min(10, questions.length);
+    if (answeredCount < minimumRequiredAnswers) {
+      setSubmitValidationError(`Please answer at least ${minimumRequiredAnswers} questions before submitting (${answeredCount}/${questions.length} answered).`);
       return;
     }
 
@@ -150,6 +151,7 @@ function Quiz() {
     }
 
     const activeCard = flashcards[activeCardIndex];
+    const progressPercent = Math.round(((activeCardIndex + 1) / flashcards.length) * 100);
     return (
       <div className="quiz-page">
         <div className="container">
@@ -162,13 +164,22 @@ function Quiz() {
           </header>
 
           <div className="flashcard-wrap">
+            <div className="flashcard-topbar">
+              <div className="flashcard-progress-meta">
+                <span className="flashcard-badge">{isCardFlipped ? 'Answer Side' : 'Question Side'}</span>
+                <span className="flashcard-tip">Flip the card to self-check your answer</span>
+              </div>
+              <div className="flashcard-progress" aria-hidden="true">
+                <span className="flashcard-progress-fill" style={{ width: `${progressPercent}%` }} />
+              </div>
+            </div>
             <button type="button" className={`flashcard ${isCardFlipped ? 'flipped' : ''}`} onClick={() => setIsCardFlipped((v) => !v)}>
               <span className="flashcard-face flashcard-front">
-                <strong>Front</strong>
+                <strong>Question</strong>
                 <p>{activeCard.frontText}</p>
               </span>
               <span className="flashcard-face flashcard-back">
-                <strong>Back</strong>
+                <strong>Answer</strong>
                 <p>{activeCard.backText}</p>
               </span>
             </button>
@@ -282,7 +293,10 @@ function Quiz() {
                           checked={answers[String(q.id)] === opt}
                           onChange={() => handleAnswer(q.id, opt)}
                         />
-                        <span><strong>{opt}.</strong> {optionText}</span>
+                        <span className="option-content">
+                          <strong className="option-letter">{opt}.</strong>
+                          <span className="option-text">{optionText}</span>
+                        </span>
                       </label>
                     );
                   })}
